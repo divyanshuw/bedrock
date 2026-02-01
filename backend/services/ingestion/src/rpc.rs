@@ -2,7 +2,7 @@ use crate::custom_err::IngestionError;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{self};
-
+use std::collections::VecDeque;
 // Payload structs
 
 #[derive(Debug, Serialize, Clone)]
@@ -68,15 +68,29 @@ pub struct Block {
 pub struct BlockData {
     pub block_height: Option<u64>,
     pub block_time: Option<i64>,
-    pub block_hash: String,
+    pub blockhash: String,
     pub parent_slot: u64,
     pub previous_blockhash: String,
-    pub transactions: 
+    pub transactions: VecDeque<Transaction>,
 }
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Transaction {
+    pub meta: Option<serde_json::Value>,
+    pub transaction: TransactionData,
+}
 
-pub struct transactions 
+#[derive(serde::Deserialize, Debug)]
+pub struct TransactionData {
+    pub message: Message,
+}
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Message {
+    pub recent_blockhash: String,
+}
 
 // Rpc client struct
 
@@ -123,7 +137,9 @@ impl RpcClient {
         Ok(slot_res.result)
     }
 
-    pub async fn get_block(&mut self, slot: u64) {
+    pub async fn get_block(&mut self) -> Result<Block, IngestionError> {
+        // Alwayas get the latest slot
+
         if let Ok(value) = self.get_latest_slot().await {
             let params = BlockParams::default();
             let payload = BlockPayload::new(value, params);
@@ -134,12 +150,40 @@ impl RpcClient {
                 .json(&payload)
                 .send()
                 .await
-                .map_err(|e| IngestionError::BlockResponseError(e.to_string()));
+                .map_err(|e| IngestionError::BlockResponseError(e.to_string()))?;
 
             let block_response: Block = res
                 .json()
                 .await
-                .map_err(|e| IngestionError::DeserializationError(e.to_string()))?;
+                .map_err(|e| IngestionError::JsonParseError(e.to_string()))?;
+            Ok(block_response)
+        } else {
+            Err(IngestionError::RpcError(String::from(
+                "Failed to get the latest slot",
+            )))
+        }
+    }
+
+    pub async fn get_block_by_slot(&self, slot: u64) -> Result<BlockData, IngestionError> {
+        let params = BlockParams::default();
+        let payload = BlockPayload::new(slot, params);
+        let res = self
+            .client
+            .post(&self.address)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| IngestionError::BlockResponseError(e.to_string()))?;
+
+        let block_response: Block = res
+            .json()
+            .await
+            .map_err(|e| IngestionError::JsonParseError(e.to_string()))?;
+
+        if let Some(block_data) = block_response.result {
+            Ok(block_data)
+        } else {
+            Err(IngestionError::BlockNotFound)
         }
     }
 }

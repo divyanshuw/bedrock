@@ -12,5 +12,8 @@ pub enum IngestionError {
     BlockResponseError(String),
 
     #[error("rpc response error")]
-    RpcError,
+    RpcError(String),
+
+    #[error("block not found on chain")]
+    BlockNotFound,
 }

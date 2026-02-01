@@ -1,10 +1,21 @@
+use sqlx::PgPool;
+pub use crate::rpc::BlockData;
 pub use std::collections::VecDeque;
+
+pub enum ReorgResult {
+    NoReorg,
+    ReorgDetected {
+        expexted_parent: String,
+        actual_parent: String,
+    },
+}
 
 pub struct IngestionState {
     pub chain_id: String,
-
     pub last_ingested_block: u64,
     pub last_finalized_block: u64,
+    pub last_blockhash: String,
+    pub last_processed_slot: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -16,6 +27,27 @@ pub struct ReorgState {
 pub struct ChainState {
     pub ingest_state: IngestionState,
     pub reorg_state: ReorgState,
+    pub db_pool: Option<PgPool>,
+}
+
+impl Default for ChainState {
+    fn default() -> Self {
+        ChainState {
+            ingest_state: IngestionState {
+                chain_id: String::from("solana-devnet"),
+                last_ingested_block: 0,
+                last_finalized_block: 0,
+                last_blockhash: String::new(),
+                last_processed_slot: 0,
+            },
+
+            reorg_state: ReorgState {
+                recent_blocks: VecDeque::new(),
+                max_depth: 100,
+            },
+            db_pool: None,
+        }
+    }
 }
 
 impl ChainState {
@@ -35,12 +67,17 @@ impl ChainState {
         self.ingest_state.last_finalized_block = block_number;
     }
 
-    pub fn detect_reorg(&self, new_hash: &String, block_number: u64) -> Option<u64> {
-        for (num, hash) in self.reorg_state.recent_blocks.iter() {
-            if *num == block_number && hash != new_hash {
-                return Some(*num);
-            }
+    pub async fn detect_reorg(
+        current_block_data: BlockData,
+        previous_state: ChainState,
+    ) -> ReorgResult {
+        if previous_state.ingest_state.last_blockhash != current_block_data.previous_blockhash {
+            return ReorgResult::ReorgDetected {
+                expexted_parent: previous_state.ingest_state.last_blockhash,
+                actual_parent: current_block_data.previous_blockhash,
+            };
+        } else {
+            ReorgResult::NoReorg
         }
-        None
     }
 }
